@@ -1,1 +1,0 @@
-# Adaptive-Savitzky-Golay-Filter
