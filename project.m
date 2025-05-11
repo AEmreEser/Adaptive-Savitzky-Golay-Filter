@@ -13,11 +13,23 @@ function [A, H, y] = base_sg(signal, M, p)
     [A, H] = construct_least_sq_matrices(M, p);
     
     for i = 1:len
-        in = xn(1, i:M+M+i);
+        in = xn(1, i : M+M+i);
         in = in(:);
-        y(1,i) = H(1,:) * in;% convolution of the sgfilter's impulse response with the signal values in each window
+        y(1,i) = H(1,:) * in; % convolution of the sgfilter's impulse response with the signal values in each window
+        % we only need the first row of H -> check page 4 on the article
+        % (right column)
+        % H(1,:) is the flipped/time-reversed impulse response of the SG filter
     end
 
+end
+
+% applies at a single point only
+% must pass the padded signal
+function y = apply_sg(n0, extended_signal, H, M)
+
+    window = extended_signal(n0-M : n0+M);
+    window = window(:);
+    y = H(1,:) * window;
 end
 
 % A and H calculation part of 
@@ -25,7 +37,7 @@ end
 function [A, H] = construct_least_sq_matrices(M, p)
     d = [-M : M]';
     l = length(d);
-    A = zeros(l,p+1);
+    A = zeros(l,p+1); % 2M + 1 many rows, p+1 many cols
     A(:,1) = 1;
     for i = 1:p
         A(:,i+1) = d(:,1).^i;
@@ -70,7 +82,7 @@ t = linspace(0, 2*pi, N);
 
 true_signal = zeros(1,N);
 
-poly_orders = [2,0,1,5,1,7,3,4,0,1,0,2];
+poly_orders = [2,7,3,4,0,6,2];
 % poly_orders = [3];
 segment_length = N / length(poly_orders);
 
@@ -134,7 +146,6 @@ function [noise, sigma] = gen_noise(type, true_signal, snr)
 
 end
 
-
 snr = 15; % db
 % noise = sigma * randn(size(true_signal));
 % [gauss_noise, sigma] = gen_gauss_noise(true_signal, snr);
@@ -145,11 +156,17 @@ noisy_signal = true_signal + noise;
 
 %
 % PARAMETERS:
-M_min = 10; M_max = 80;
-M = 4; p = 3; n0 = M+1;
+% base sg params:
+M = 12; p = 3; 
+% optim params
 p_min = 0; p_max = 7;
+M_min = 4; M_max = 20;
 
-grid_r = 6; grid_c = 1; 
+%
+% PLOTTING PARAMS
+grid_r = 4; grid_c = 2; 
+
+
 figure;
 % orig signal
 subplot(grid_r, grid_c, 1);
@@ -164,15 +181,15 @@ title("noisy signal");
 % sg filtered signal
 subplot(grid_r, grid_c, 3);
 
-[A, H, y] = base_sg(noisy_signal, M, p);
+[A, H, base_sg_res] = base_sg(noisy_signal, M, p);
 
-plot(t, y, 'r-');
+plot(t, base_sg_res, 'r-');
 hold on;
 plot(t, true_signal, 'b-');
-title("sg filtered signal ");
+title(sprintf("base sg filtered signal (M: %d, p: %d)", M, p));
 legend('sg fit', 'original signal');
 
-% risk estimates plot
+% RISK ESTIMATES PLOT
 Rs = zeros(1, length(noisy_signal));
 
 % evaluate R at all centers of windows of size 2*M+1
@@ -184,9 +201,9 @@ end
 
 subplot(grid_r, grid_c, 4);
 plot(t, Rs);
-title("Risk estimates at different window centers");
+title(sprintf("Risk estimates at different window centers (M: %d, p: %d)", M, p));
 
-% optimal order plot
+% OPTIMAL ORDER PLOT
 opt_orders = zeros(1, length(noisy_signal));
 
 for n0_i = [M+1:length(noisy_signal)-M]
@@ -198,7 +215,7 @@ subplot(grid_r, grid_c, 5);
 plot(t, opt_orders);
 title("Optimal orders at different window centers");
 
-% optimal lengths plot
+% OPTIMAL LENGTHS PLOT
 
 opt_lens = zeros(1, length(noisy_signal));
 
@@ -224,12 +241,56 @@ subplot(grid_r, grid_c, 6);
 plot(t, opt_lens);
 title("Optimal filter lengths at different window centers");
 
-clear all;
+% SIMULTANEOUS OPTIMIZATION PLOT
+sim_opt_lens = zeros(1, length(noisy_signal));
+sim_opt_ords = zeros(1, length(noisy_signal));
+
+for n0_i = [1:length(noisy_signal)]
+    [~, p, m] = simult_optim(n0_i, noisy_signal, sigma, p_min, p_max, M_min, M_max);
+    sim_opt_ords(n0_i) = p;
+    sim_opt_lens(n0_i) = m;
+    % fprintf("p: %d, m: %d\n", p, m);
+end % for: n0
+
+subplot(grid_r, grid_c, 7);
+plot(t, sim_opt_lens, "g");
+title("Simulatenously optimized filter lengths");
+
+subplot(grid_r, grid_c, 8);
+plot(t, sim_opt_ords, "g");
+title("Simulatenously optimized orders");
+
+
+% SG WITH SIMULT OPTIM
+
+% todo: calculate A and H only once and pass them to the simult optim
+% result
+figure;
+
+filtered_signal = zeros(1, length(noisy_signal));
+
+for n0 = [1:length(noisy_signal)]
+    [~, p, m] = simult_optim(n0, noisy_signal, sigma, p_min, p_max, M_min, M_max);
+    [~, H] = construct_least_sq_matrices(m, p);
+    filtered_signal(n0) = apply_sg(n0+m, [zeros(1,m), noisy_signal, zeros(1,m)], H, m);
+end
+
+plot(t, filtered_signal, "r-");
+hold on;
+title("SG with simult optimizations");
+% plot(t, noisy_signal, "cyan");
+plot(t, true_signal, "black", "LineWidth",2);
+plot(t, base_sg_res, "green");
+legend('adaptive fit', 'actual signal', 'base sg fit');
+
+% TODO: calculate the error between the signal and the fits
 
 %% paper's algo's implementation
 
 % A and H come from least squares regression
 % this is formula 15 from the paper
+% GUE-MSE (general unbiased estimate of mean squared error)
+% !!!! n0 has to be the center of the window
 function R = risk_estimate(M, n0, A, H, signal, sigma)
     % fprintf("dims A: %dx%d ", size(A,1), size(A,2));
     % fprintf("dims H: %dx%d ", size(H,1), size(H,2));
@@ -261,6 +322,7 @@ function [R_min, p_opt] = select_opt_order(M, n0, signal, sigma, p_min, p_max)
     for p = p_min : p_max
         % disp(p);
         [A, H] = construct_least_sq_matrices(M, p);
+        % TODO: SHOULD WE NOT BE PADDING THE SIGNAL BELOW???!!!
         Rs(p - p_min + 1) = risk_estimate(M, n0, A, H, signal, sigma);
         % disp(Rs);
     end
@@ -288,4 +350,28 @@ function [R_min, M_opt] = select_opt_filt_len(p, n0, signal, sigma, M_min, M_max
     % disp(Rs);
     % fprintf("M_opt: %d\n", M_opt);
     M_opt = M_opt + M_min - 1;
+end
+
+% this is the G-FL-O algo
+function [R_min, p_opt, M_opt] = simult_optim(n0, signal, sigma, p_min, p_max, M_min, M_max)
+
+    assert(2*M_min > p_max);
+    assert(M_max > M_min);
+    assert(p_max > p_min);
+    
+    Rs = zeros(p_max - p_min + 1, M_max - M_min +1);
+
+    for p = p_min : p_max
+        for m = M_min : M_max
+
+            [A, H] = construct_least_sq_matrices(m, p);
+            Rs(p - p_min + 1, m - M_min + 1) = risk_estimate(m, n0+m, A, H, [zeros(1,m), signal, zeros(1,m)], sigma);
+            % fprintf("p: %d, m: %d, R: %d\n", p, m, Rs(p - p_min + 1, m - M_min + 1));
+        end % for: M
+    end % for: p
+
+    [R_min, min_flat_idx] = min( Rs(:) ); % this get shte flattened vector's index
+    [p_opt, M_opt] = ind2sub(size(Rs), min_flat_idx); % we convert it to matrix index
+    p_opt = p_opt + p_min -1;
+    M_opt = M_opt + M_min -1;
 end
