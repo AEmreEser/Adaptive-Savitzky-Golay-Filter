@@ -49,25 +49,6 @@ function [A, H] = construct_least_sq_matrices(M, p)
     % disp(size(H))
 end
 
-% noise func
-function noise = generate_noise(type, sigma)
-    
-    sigma_sq = sigma^2;
-    
-    switch type
-        case 'lp'
-            noise = sigma * (randn(size(sigma_sq)) + randn(size(sigma_sq)));
-            
-        case 'un'
-            a = -sqrt(3) * sigma;
-            b = sqrt(3) * sigma;
-            noise = a + (b - a) * rand(size(sigma_sq));
-            
-        otherwise
-            assert(0); % fail
-    end
-end
-
 % noise is quoted in terms of both snr and sigma (std dev) in the article
 function sigma = sigma_from_snr(signal, snr_db)
     signal_power = mean(signal(:).^2);
@@ -82,7 +63,7 @@ t = linspace(0, 2*pi, N);
 
 true_signal = zeros(1,N);
 
-poly_orders = [2,7,3,4,0,6,2];
+poly_orders = [2,7,1,3,0,4,0,6,2];
 % poly_orders = [3];
 segment_length = N / length(poly_orders);
 
@@ -279,11 +260,16 @@ plot(t, filtered_signal, "r-");
 hold on;
 title("SG with simult optimizations");
 % plot(t, noisy_signal, "cyan");
-plot(t, true_signal, "black", "LineWidth",2);
+plot(t, true_signal, "black", "LineWidth", 2);
 plot(t, base_sg_res, "green");
 legend('adaptive fit', 'actual signal', 'base sg fit');
 
-% TODO: calculate the error between the signal and the fits
+fprintf("MSE between filtered results and the TRUE signal:\n");
+mse_filtered = sum((true_signal - filtered_signal).^2) / (length(filtered_signal));
+fprintf("\tMSE of filtered signal: %f\n", mse_filtered); % we see actual improvement here, nice : )
+
+mse_base_sg = sum((true_signal - base_sg_res).^2) / (length(base_sg_res));
+fprintf("\tMSE of base sg filtered signal: %f\n", mse_base_sg);
 
 %% paper's algo's implementation
 
@@ -307,6 +293,13 @@ function R = risk_estimate(M, n0, A, H, signal, sigma)
     term4 = norm(x)^2;
 
     R = (1/wind_size) * (term1 + term2 + term3 + term4) - sigma_sq;
+end
+
+function R = regularized_risk_estimate(M, n0, A, H, signal, sigma)
+    lambda = 12 * sigma.^2;
+    R_base = risk_estimate(M, n0, A, H, signal, sigma);
+    regularizer = (lambda / (2 * M + 1) ) * sum( diag( (A * H).^2 ) );
+    R = R_base + regularizer;
 end
 
 function [R_min, p_opt] = select_opt_order(M, n0, signal, sigma, p_min, p_max)
