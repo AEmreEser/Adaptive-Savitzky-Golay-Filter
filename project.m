@@ -38,14 +38,11 @@ end
 function R = estimate_risk(type, M, n0, A, H, signal, sigma)
 
     switch type
-        case 'regular'
-        case 'REGULAR'
-        case 'regularized'
-            R = risk_regularizer(M, A, H, sigma);
+        case {'REGULAR','regularized', 'regular'}
+            R = risk_regularizer(M, A, H, sigma) + UNregularized_risk_estimate(M, n0, A, H, signal, sigma);
         otherwise
-            R = 0;
+            R = UNregularized_risk_estimate(M, n0, A, H, signal, sigma);
     end
-    R = R + UNregularized_risk_estimate(M, n0, A, H, signal, sigma);
 end
 
 function [R_min, p_opt] = select_opt_order(M, n0, signal, sigma, p_min, p_max, regularized)
@@ -63,12 +60,10 @@ function [R_min, p_opt] = select_opt_order(M, n0, signal, sigma, p_min, p_max, r
         [A, H] = construct_least_sq_matrices(M, p);
         % TODO: SHOULD WE NOT BE PADDING THE SIGNAL BELOW???!!!
         switch regularized
-            case 'regular'
-            case 'REGULAR'
-            case 'regularized'
-                Rs(p - p_min + 1) = estimate_risk('regular', M, n0, A, H, signal, sigma);
+            case {'regularized', 'REGULAR', 'regular'}
+                Rs(p - p_min + 1) = estimate_risk('regular', M, n0+M, A, H, [zeros(1,M), signal, zeros(1,M)], sigma);
             otherwise
-                Rs(p - p_min + 1) = estimate_risk('NONE', M, n0, A, H, signal, sigma);
+                Rs(p - p_min + 1) = estimate_risk('NONE', M, n0+M, A, H, [zeros(1,M), signal, zeros(1,M)], sigma);
         end % switch
         % disp(Rs);
     end
@@ -85,15 +80,15 @@ function [R_min, M_opt] = select_opt_filt_len(p, n0, signal, sigma, M_min, M_max
     Rs = zeros(1, M_max - M_min + 1);
     
     for m = M_min : M_max
+        % fprintf("inside opt filt, m: %d\n", m);
         [A, H] = construct_least_sq_matrices(m, p);
         % we pad the signal so that we can calculate the filter lengths at
         % the beginning and the end
         % we need to pass n0+m since we padded the signal
         switch regularized
-            case 'regular'
-            case 'REGULAR'
-            case 'regularized'
+            case {'regular', 'REGULAR', 'regularized'}
                 Rs(m - M_min + 1) = estimate_risk('regular', m, n0+m, A, H, [zeros(1, m), signal, zeros(1, m)], sigma);
+                % fprintf("Risk: %f\n", Rs(m - M_min + 1));
             otherwise
                 Rs(m - M_min + 1) = estimate_risk('NONE', m, n0+m, A, H, [zeros(1, m), signal, zeros(1, m)], sigma);
         end % switch
@@ -119,9 +114,7 @@ function [R_min, p_opt, M_opt] = simult_optim(n0, signal, sigma, p_min, p_max, M
 
             [A, H] = construct_least_sq_matrices(m, p);
             switch regularized
-                case 'regular'
-                case 'REGULAR'
-                case 'regularized'
+                case {'regularized', 'REGULAR', 'regular'}
                     Rs(p - p_min + 1, m - M_min + 1) = estimate_risk('regular', m, n0+m, A, H, [zeros(1,m), signal, zeros(1,m)], sigma);
                 otherwise
                     Rs(p - p_min + 1, m - M_min + 1) = estimate_risk('NONE', m, n0+m, A, H, [zeros(1,m), signal, zeros(1,m)], sigma);
@@ -193,6 +186,17 @@ function sigma = sigma_from_snr(signal, snr_db)
     sigma = sqrt(noise_power);
 end
 
+function snr = get_snr(clean_signal, noisy_signal)
+    if length(clean_signal) ~= length(noisy_signal)
+        error('signals must be the same length');
+    end
+
+    noise = noisy_signal - clean_signal;
+    signal_power = mean(clean_signal.^2);
+    noise_power  = mean(noise.^2);
+    snr = 10 * log10(signal_power / noise_power);
+end
+
 %% test generation
 N = 200;
 t = linspace(0, 2*pi, N);
@@ -200,8 +204,8 @@ t = linspace(0, 2*pi, N);
 true_signal = zeros(1,N);
 
 fprintf("Poly orders:\n");
-% poly_orders = [0,7,1,6,2,5,3,4] % abrupt changes case
-poly_orders = [0,1,2,3,4,5,6,7] % gradual changes case
+poly_orders = [0,7,1,6,2,5,3,4] % abrupt changes case
+% poly_orders = [0,1,2,3,4,5,6,7] % gradual changes case
 % poly_orders = [3]
 segment_length = N / length(poly_orders);
 
@@ -212,6 +216,8 @@ for i = 1:length(poly_orders)
     true_signal(start_idx:end_idx) = polyval(polyfit(t_segment, sin(2*t_segment) + cos(3*t_segment), poly_orders(i)), t_segment);
 end
 
+
+% THESE FUNCTIONS DO NOT ADD THE GENERATED NOISE TO THE TRUE SIGNAL!!!
 function [noise, sigma] = gen_gauss_noise(true_signal, snr)
     signal_power = mean(true_signal.^2);
     noise_power = signal_power / (10^(snr/10));
@@ -298,7 +304,7 @@ M_min = 4; M_max = 20;
 
 %
 % PLOTTING PARAMS
-grid_r = 4; grid_c = 2; 
+grid_r = 3; grid_c = 2; 
 
 
 figure;
@@ -308,12 +314,12 @@ plot(t, true_signal);
 title("original signal");
 
 % nosiy signal
-subplot(grid_r, grid_c, 2);
+subplot(grid_r, grid_c, 3);
 plot(t, noisy_signal);
 title("noisy signal");
 
 % sg filtered signal
-subplot(grid_r, grid_c, 3);
+subplot(grid_r, grid_c, 5);
 
 [A, H, base_sg_res] = base_sg(noisy_signal, M, p);
 
@@ -333,7 +339,7 @@ for n0_i = [M+1:length(noisy_signal)-M]
     % fprintf("Risk estimate for %d to %d: %d\n",n0-M, n0+M, R);
 end
 
-subplot(grid_r, grid_c, 4);
+subplot(grid_r, grid_c, 2);
 plot(t, Rs);
 title(sprintf("UNregularized Risk estimates at different window centers (M: %d, p: %d)", M, p));
 
@@ -345,7 +351,7 @@ for n0_i = [M+1:length(noisy_signal)-M]
     opt_orders(n0_i) = order;
 end
 
-subplot(grid_r, grid_c, 5);
+subplot(grid_r, grid_c, 4);
 plot(t, opt_orders);
 title("Optimal orders at different window centers (unregularized risk)");
 
@@ -375,85 +381,334 @@ subplot(grid_r, grid_c, 6);
 plot(t, opt_lens);
 title("Optimal filter lengths at different window centers (unregularized risk)");
 
-% SIMULTANEOUS OPTIMIZATION PLOT
-sim_opt_lens = zeros(1, length(noisy_signal));
-sim_opt_ords = zeros(1, length(noisy_signal));
+% % simultaneous optim
+% sim_opt_lens = zeros(1, length(noisy_signal));
+% sim_opt_ords = zeros(1, length(noisy_signal));
+% 
+% for n0_i = [1:length(noisy_signal)]
+%     [~, p, m] = simult_optim(n0_i, noisy_signal, sigma, p_min, p_max, M_min, M_max, 'NONE');
+%     sim_opt_ords(n0_i) = p;
+%     sim_opt_lens(n0_i) = m;
+%     % fprintf("p: %d, m: %d\n", p, m);
+% end % for: n0
+% 
+% subplot(grid_r, grid_c, 7);
+% plot(t, sim_opt_lens, "g");
+% title("Simulatenously optimized filter lengths (unregularized risk)");
+% 
+% subplot(grid_r, grid_c, 8);
+% plot(t, sim_opt_ords, "g");
+% title("Simulatenously optimized orders (unregularized risk)");
 
-for n0_i = [1:length(noisy_signal)]
-    [~, p, m] = simult_optim(n0_i, noisy_signal, sigma, p_min, p_max, M_min, M_max, 'NONE');
-    sim_opt_ords(n0_i) = p;
-    sim_opt_lens(n0_i) = m;
-    % fprintf("p: %d, m: %d\n", p, m);
-end % for: n0
 
-subplot(grid_r, grid_c, 7);
-plot(t, sim_opt_lens, "g");
-title("Simulatenously optimized filter lengths (unregularized risk)");
+% Base savitzky golay
 
-subplot(grid_r, grid_c, 8);
-plot(t, sim_opt_ords, "g");
-title("Simulatenously optimized orders (unregularized risk)");
-
-
-% SG WITH SIMULT OPTIM - Unregularized
-
-% todo: calculate A and H only once and pass them to the simult optim
-% result
-figure;
+figure
 grid_r = 2; grid_c = 1;
+plot(t, true_signal, "black", "LineWidth", 2);
+hold on;
+plot(t, base_sg_res, "red");
+title("base savitzky-golay")
+legend('base savitzky-golay', 'actual signal');
 
-filtered_signal = zeros(1, length(noisy_signal));
+fprintf("MSE between base savitzky-golay and the TRUE signal:\n");
+mse_base_sg = mse(true_signal, base_sg_res);
+fprintf("\tMSE of base sg filtered signal: %f\n", mse_base_sg);
 
-for n0 = [1:length(noisy_signal)]
-    [~, p, m] = simult_optim(n0, noisy_signal, sigma, p_min, p_max, M_min, M_max, 'NONE');
-    [~, H] = construct_least_sq_matrices(m, p);
-    filtered_signal(n0) = apply_sg(n0+m, [zeros(1,m), noisy_signal, zeros(1,m)], H, m);
-end
+% The article has its own lingo for different configurations of the
+% adaptive filter: 
+
+% G-FL: fixed order, no regularization
+%   M is elt [2, 20], p = 3
+% G-FL-R: fixed order, with regularization
+%   same as G-FL, lambda = 12 * sigma^2
+
+% G-O: fixed length, no regularization
+%   M = 15, p is elt [1, 5]
+% G-O-R: fixed length, with regularization
+%   same as G-O, lambda = 12 * sigma^2
+
+% G-FL-O: simult. optim, no regularization
+%   M is elt [10, 20], p is elt [1, 7]
+% G-FL-O-R: simult. optim, with regularization
+%   M is elt [10, 20], p is elt [1, 7], lambda = 12 * sigma^2
+
+% G-FL-O(-R) - simultaneous optimization with unregularized risk
+
+function [G_FL_O_filtered_signal, G_FL_O_orders, G_FL_O_lengths] = GFLO(noisy_signal, p_min, p_max, M_min, M_max, sigma)
+    G_FL_O_filtered_signal = zeros(1, length(noisy_signal));
+    G_FL_O_orders  = zeros(1, length(noisy_signal));
+    G_FL_O_lengths = zeros(1, length(noisy_signal));
+    
+    for n0 = [1:length(noisy_signal)]
+        [~, p, m] = simult_optim(n0, noisy_signal, sigma, p_min, p_max, M_min, M_max, 'NONE');
+        [~, H] = construct_least_sq_matrices(m, p);
+        G_FL_O_filtered_signal(n0) = apply_sg(n0+m, [zeros(1,m), noisy_signal, zeros(1,m)], H, m);
+        G_FL_O_lengths(n0) = m;
+        G_FL_O_orders(n0) = p;
+    end
+end % function
+
+[G_FL_O_filtered_signal, G_FL_O_orders, G_FL_O_lengths] = GFLO(noisy_signal, p_min, p_max, M_min, M_max, sigma);
 
 function err = mse(true_signal, signal)
     err = sum((true_signal - signal).^2) / (length(signal));
 end
 
+grid_r = 3; grid_c = 2;
+
+figure;
 subplot(grid_r, grid_c, 1);
-plot(t, filtered_signal, "r-");
+plot(t, G_FL_O_filtered_signal, "r-");
 hold on;
-title("SG with simult optimizations (unregularized risk)");
-% plot(t, noisy_signal, "cyan");
+title("G-FL-O");
 plot(t, true_signal, "black", "LineWidth", 2);
-plot(t, base_sg_res, "green");
-legend('adaptive fit', 'actual signal', 'base sg fit');
+legend('G-FL-O', 'true signal');
 
-fprintf("MSE between filtered results and the TRUE signal:\n");
-mse_filtered = mse(true_signal, filtered_signal);
-fprintf("\tMSE of filtered signal (unregularized): %f\n", mse_filtered); % we see actual improvement here, nice : )
+subplot(grid_r, grid_c, 3);
+plot(t, G_FL_O_orders);
+title("G-FL-O orders");
 
-mse_base_sg = mse(true_signal, base_sg_res);
-fprintf("\tMSE of base sg filtered signal: %f\n", mse_base_sg);
+subplot(grid_r, grid_c, 5);
+plot(t, G_FL_O_lengths);
+title("G-FL-O filter lengths");
 
-% SG WITH SIMULT OPTIM - REGULARIZED
-filtered_signal_regular = zeros(1, length(noisy_signal));
+fprintf("\nMSE between G-FL-O(-R) and the TRUE signal:\n");
+mse_filtered = mse(true_signal, G_FL_O_filtered_signal);
+fprintf("\tMSE of G-FL-O: %f\n", mse_filtered); % we see actual improvement here, nice : )
 
-for n0 = [1:length(noisy_signal)]
-    [~, p, m] = simult_optim(n0, noisy_signal, sigma, p_min, p_max, M_min, M_max, 'regular');
-    [~, H] = construct_least_sq_matrices(m, p);
-    filtered_signal_regular(n0) = apply_sg(n0+m, [zeros(1,m), noisy_signal, zeros(1,m)], H, m);
-end
+% G-FL-O-R - simultaneous optim with regularized risk
+function [G_FL_O_R_filtered_signal, G_FL_O_R_orders, G_FL_O_R_lengths] = GFLOR(noisy_signal, p_min, p_max, M_min, M_max, sigma)
+    G_FL_O_R_filtered_signal = zeros(1, length(noisy_signal));
+    G_FL_O_R_orders  = zeros(1, length(noisy_signal));
+    G_FL_O_R_lengths = zeros(1, length(noisy_signal));
+    
+    for n0 = [1:length(noisy_signal)]
+        [~, p, m] = simult_optim(n0, noisy_signal, sigma, p_min, p_max, M_min, M_max, 'regular');
+        [~, H] = construct_least_sq_matrices(m, p);
+        G_FL_O_R_filtered_signal(n0) = apply_sg(n0+m, [zeros(1,m), noisy_signal, zeros(1,m)], H, m);
+        G_FL_O_R_lengths(n0) = m;
+        G_FL_O_R_orders(n0) = p;
+    end
+end % function
+
+[G_FL_O_R_filtered_signal, G_FL_O_R_orders, G_FL_O_R_lengths] = GFLOR(noisy_signal, p_min, p_max, M_min, M_max, sigma);
 
 subplot(grid_r, grid_c, 2);
 plot(t, true_signal, "black", "LineWidth", 2);
 hold on;
-plot(t, filtered_signal_regular, "blue");
-plot(t, filtered_signal, "red");
-legend("true signal", "regularized risk sg fit", "UNregularized risk sg fit");
-title("Regularized risk fit vs UNregularized risk fit");
+plot(t, G_FL_O_R_filtered_signal, "blue");
+legend("true signal", "G-FL-O-R");
+title("G-FL-O-R");
 
-fprintf("\tMSE of regularized risk estimate filtered signal: %f\n", mse(true_signal, filtered_signal_regular));
+subplot(grid_r, grid_c, 4);
+plot(t, G_FL_O_R_orders);
+title("G-FL-O-R orders");
+
+subplot(grid_r, grid_c, 6);
+plot(t, G_FL_O_R_lengths);
+title("G-FL-O-R filter lengths");
+
+fprintf("\tMSE of G-FL-O-R: %f\n", mse(true_signal, G_FL_O_R_filtered_signal));
 
 % TODO:
-% copy the cases over from the article and try to reproduce the results
-% re-organize the plots
 % visualize the boundaries between different orders of polynomials on the
 % plots
-% collect all mse's for all cases and visualize them, draw conclusions
-% functions for the defined cases (G-O-R G-FL-O-R etc.)
+% output snr vs input snr graphs for all algos
 % report the results
+
+
+% G-FL(-R) - Only optimize filter length
+p = 3;
+
+function [G_FL_filtered_signal, G_FL_filter_lens] = GFL(p, noisy_signal, M_min, M_max, sigma)
+    G_FL_filtered_signal = zeros(1, length(noisy_signal));
+    G_FL_filter_lens = zeros(1, length(noisy_signal));
+    for n0 = [1:length(noisy_signal)]
+        [~, m] = select_opt_filt_len(p, n0, noisy_signal, sigma, M_min, M_max, 'NONE');
+        G_FL_filter_lens(n0) = m;
+        [~, H] = construct_least_sq_matrices(m, p);
+        G_FL_filtered_signal(n0) = apply_sg(n0+m, [zeros(1,m), noisy_signal, zeros(1,m)], H, m);
+    end
+end % function
+
+[G_FL_filtered_signal, G_FL_filter_lens] = GFL(p, noisy_signal, M_min, M_max, sigma);
+
+figure;
+grid_r = 2;
+grid_c = 2;
+
+subplot(grid_r, grid_c, 1);
+plot(t, true_signal, "black", "LineWidth", 2);
+hold on;
+plot(t, G_FL_filtered_signal, "red");
+title("G-FL");
+legend("true signal", "G-FL filtered");
+
+subplot(grid_r, grid_c, 3);
+plot(t, G_FL_filter_lens, "blue");
+title("G-FL Filter lengths");
+
+
+p = 3;
+p_min = 1; p_max = 7;
+M_min = 4; M_max = 20;
+
+function [G_FL_R_filtered_signal, G_FL_R_filter_lens] = GFLR(p, noisy_signal, M_min, M_max, sigma)
+    G_FL_R_filtered_signal = zeros(1, length(noisy_signal));
+    G_FL_R_filter_lens = zeros(1, length(noisy_signal));
+
+    for n0 = [1:length(noisy_signal)]
+        [~, m] = select_opt_filt_len(p, n0, noisy_signal, sigma, M_min, M_max, 'regular');
+        G_FL_R_filter_lens(n0) = m;
+        [~, H] = construct_least_sq_matrices(m, p);
+        G_FL_R_filtered_signal(n0) = apply_sg(n0+m, [zeros(1,m), noisy_signal, zeros(1,m)], H, m);
+    end
+end % function
+
+[G_FL_R_filtered_signal, G_FL_R_filter_lens] = GFLR(p, noisy_signal, M_min, M_max, sigma);
+
+subplot(grid_r, grid_c, 2);
+plot(t, true_signal, "black", "LineWidth", 2);
+hold on;
+plot(t, G_FL_R_filtered_signal, "red");
+title("G-FL-R");
+legend("true signal", "G-FL-R filtered");
+
+subplot(grid_r, grid_c, 4);
+plot(t, G_FL_R_filter_lens, "blue");
+title("G-FL-R Filter lengths");
+
+fprintf("\nMSE between G-FL(-R) and the TRUE signal:\n");
+fprintf("\tMSE of G-FL: %f\n", mse(true_signal, G_FL_filtered_signal));
+fprintf("\tMSE of G-FL-R: %f\n", mse(true_signal, G_FL_R_filtered_signal));
+
+
+% G-O(-R) - optimize polynomial order only
+
+m = 15;
+p_max = 5; p_min = 1;
+
+function [G_O_filtered_signal, G_O_orders] = GO(m, noisy_signal, p_min, p_max, sigma)
+    G_O_filtered_signal = zeros(1, length(noisy_signal));
+    G_O_orders = zeros(1, length(noisy_signal));
+
+    for n0 =  [1:length(noisy_signal)] % [m+1:length(noisy_signal)-m]
+        [~, p] = select_opt_order(m, n0, noisy_signal, sigma, p_min, p_max, 'NONE');
+        G_O_orders(n0) = p;
+        [~, H] = construct_least_sq_matrices(m, p);
+        G_O_filtered_signal(n0) = apply_sg(n0+m, [zeros(1,m), noisy_signal, zeros(1,m)], H, m);
+    end
+end
+
+[G_O_filtered_signal, G_O_orders] = GO(m, noisy_signal, p_min, p_max, sigma);
+
+figure;
+subplot(grid_r, grid_c, 1);
+plot(t, true_signal, "black", "LineWidth", 2);
+hold on;
+plot(t, G_O_filtered_signal, "red");
+title("G-O");
+legend("true signal", "G-O filtered signal");
+
+subplot(grid_r, grid_c, 2);
+plot(t, G_O_orders, "blue");
+title("G-O orders");
+
+function [G_O_R_filtered_signal, G_O_R_orders] = GOR(m, noisy_signal, p_min, p_max, sigma)
+    G_O_R_filtered_signal = zeros(1, length(noisy_signal));
+    G_O_R_orders = zeros(1, length(noisy_signal));
+    
+    for n0 = [1:length(noisy_signal)] % [m+1:length(noisy_signal)-m]
+        [~, p] = select_opt_order(m, n0, noisy_signal, sigma, p_min, p_max, 'regular');
+        G_O_R_orders(n0) = p;
+        [~, H] = construct_least_sq_matrices(m, p);
+        G_O_R_filtered_signal(n0) = apply_sg(n0+m, [zeros(1,m), noisy_signal, zeros(1,m)], H, m);
+    end
+end % function
+
+[G_O_R_filtered_signal, G_O_R_orders] = GOR(m, noisy_signal, p_min, p_max, sigma);
+
+subplot(grid_r, grid_c, 3);
+plot(t, true_signal, "black", "LineWidth", 2);
+hold on;
+plot(t, G_O_R_filtered_signal, "red");
+title("G-O-R");
+legend("true signal", "G-O-R filtered signal");
+
+subplot(grid_r, grid_c, 4);
+plot(t, G_O_R_orders, "blue");
+title("G-O-R orders");
+
+fprintf("\nMSE between G-O(-R) and the TRUE signal:\n");
+fprintf("\tMSE of G-O: %f\n", mse(true_signal, G_O_filtered_signal));
+fprintf("\tMSE of G-O-R: %f\n", mse(true_signal, G_O_R_filtered_signal));
+
+%%
+% TESTING ON PIECEWISE SIGNALS WITH DIFFERENT SNRs
+% SNR SWEEP PART
+
+% noise_type = 'lp';
+fprintf("\nDiffernt SNRs testing - noise type: %s\n", noise_type);
+
+noise_types = ["un", "gs", "lp"];
+noise_type_full_name = ["uniform", "gaussian", "laplace"];
+
+for noise_type = noise_types
+    
+    input_snr_space = [-5:5:25]; 
+    input_noise_space = zeros(length(input_snr_space), length(true_signal));
+    noisy_signal_space = zeros(length(input_snr_space), length(true_signal));
+    
+    GO_output_snr_space = zeros(1, length(input_snr_space));
+    GOR_output_snr_space = zeros(1, length(input_snr_space));
+    
+    GFL_output_snr_space = zeros(1, length(input_snr_space));
+    GFLR_output_snr_space = zeros(1, length(input_snr_space));
+    
+    GFLO_output_snr_space = zeros(1, length(input_snr_space));
+    GFLOR_output_snr_space = zeros(1, length(input_snr_space));
+    
+    for snr_i = 1:length(input_snr_space)
+        [noise, sigma] = gen_noise(noise_type, true_signal, input_snr_space(snr_i));
+        input_noise_space(snr_i, :) = noise;
+        noisy_signal_space(snr_i, :) = input_noise_space(snr_i, :) + true_signal;
+    
+    end
+    
+    % disp(input_snr_space);
+    % disp(noisy_signal_space);
+    
+    for snr_i = 1:length(input_snr_space)
+        noisy_signal = noisy_signal_space(snr_i, :); 
+        
+        [GO_out, ~] = GO(m, noisy_signal, p_min, p_max, sigma);
+        [GOR_out, ~] = GOR(m, noisy_signal, p_min, p_max, sigma);
+        GO_output_snr_space(snr_i) = get_snr(true_signal, GO_out);
+        GOR_output_snr_space(snr_i) = get_snr(true_signal, GOR_out);
+    
+        [GFL_out, ~] = GFL(p, noisy_signal, M_min, M_max, sigma);
+        [GFLR_out, ~] = GFLR(p, noisy_signal, M_min, M_max, sigma);
+        GFL_output_snr_space(snr_i) = get_snr(true_signal, GFL_out);
+        GFLR_output_snr_space(snr_i) = get_snr(true_signal, GFLR_out);
+    
+        [GFLO_out, ~, ~] = GFLO(noisy_signal, p_min, p_max, M_min, M_max, sigma);
+        [GFLOR_out, ~, ~] = GFLOR(noisy_signal, p_min, p_max, M_min, M_max, sigma);
+        GFLO_output_snr_space(snr_i) = get_snr(true_signal, GFLO_out);
+        GFLOR_output_snr_space(snr_i) = get_snr(true_signal, GFLOR_out);
+    end
+    
+    figure;
+    plot(input_snr_space, GO_output_snr_space, "r-o"); hold on; 
+    plot(input_snr_space, GOR_output_snr_space, "g-s"); hold on; 
+    plot(input_snr_space, GFL_output_snr_space, "b-x"); hold on; 
+    plot(input_snr_space, GFLR_output_snr_space, "k-*"); hold on; 
+    plot(input_snr_space, GFLO_output_snr_space, "m-^"); hold on; 
+    plot(input_snr_space, GFLOR_output_snr_space, "c-d");
+    
+    legend("GO", "GOR", "GFL", "GFLR", "GFLO", "GFLOR");
+    title(sprintf("output snr vs input snr for %s noise", noise_type_full_name( find(noise_types == noise_type)) ));
+    xlabel("input snr (db)");
+    ylabel("output snr (db)");
+
+end % for noise type
